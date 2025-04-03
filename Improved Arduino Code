@@ -1,0 +1,165 @@
+#define BLYNK_TEMPLATE_ID "your template ID from Blynk"
+#define BLYNK_TEMPLATE_NAME "your template name from Blynk"
+#define BLYNK_AUTH_TOKEN "your auth token from Blynk"
+
+#include <DHT.h>
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+
+// WiFi Credentials
+const char* ssid = "your wifi name";
+const char* pass = "your wifi password";
+
+// DHT22 setup
+#define DHTPIN D2
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+
+// Soil moisture sensor
+#define SOIL_MOISTURE_PIN A0  
+#define SOIL_THRESHOLD 600    
+
+// Relay control for devices
+#define PUMP_RELAY D3   // Water pump (LOW = ON, HIGH = OFF)
+#define LIGHT_RELAY D6  // Light (LOW = OFF, HIGH = ON)
+#define BUZZER_RELAY D7 // Alarm buzzer (LOW = OFF, HIGH = ON)
+
+// Blynk virtual pins
+#define VIRTUAL_TEMP V0
+#define VIRTUAL_HUMIDITY V1
+#define VIRTUAL_SOIL V2
+#define VIRTUAL_BUZZER V3
+#define VIRTUAL_PUMP V4
+#define VIRTUAL_LIGHT V5
+#define VIRTUAL_MODE V6  // Mode: 0 - Manual, 1 - Automatic
+
+float temperature;
+float humidity;
+int soilMoisture;
+
+// Variables to control data sending time
+unsigned long lastUpdate = 0;
+const long interval = 2000;
+
+bool autoMode = true; // Default mode is automatic
+
+void setup() {
+    Serial.begin(115200);
+    WiFi.begin(ssid, pass);
+    
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected to WiFi!");
+    Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+    
+    dht.begin();
+    pinMode(SOIL_MOISTURE_PIN, INPUT);
+
+    pinMode(PUMP_RELAY, OUTPUT);
+    pinMode(LIGHT_RELAY, OUTPUT);
+    pinMode(BUZZER_RELAY, OUTPUT);
+    
+    // Set initial state for devices
+    digitalWrite(PUMP_RELAY, HIGH);   // Pump OFF (LOW = ON)
+    digitalWrite(LIGHT_RELAY, LOW);   // Light OFF (HIGH = ON)
+    digitalWrite(BUZZER_RELAY, LOW);  // Buzzer OFF (HIGH = ON)
+    
+    Blynk.virtualWrite(VIRTUAL_MODE, autoMode);
+    delay(2000);
+}
+
+void loop() {
+    Blynk.run();
+    if (millis() - lastUpdate >= interval) {
+        lastUpdate = millis();
+        sendSensorData();
+        checkConditions();
+
+        if (autoMode) {
+            controlDevices();
+        }
+    }
+}
+
+void sendSensorData() {
+    temperature = dht.readTemperature();
+    humidity = dht.readHumidity();
+    int rawSoil = analogRead(SOIL_MOISTURE_PIN);
+    soilMoisture = constrain(map(rawSoil, 1023, 0, 0, 100), 0, 100);
+    
+    if (isnan(temperature) || isnan(humidity)) {
+        Serial.println("Error: Failed to read from DHT22!");
+        temperature = -1;
+        humidity = -1;
+    }
+
+    Serial.print("Temperature: "); Serial.print(temperature); Serial.println("°C");
+    Serial.print("Humidity: "); Serial.print(humidity); Serial.println("%");
+    Serial.print("Soil Moisture: "); Serial.println(soilMoisture);
+    Serial.println("--------------------------");
+    
+    Blynk.virtualWrite(VIRTUAL_TEMP, temperature);
+    Blynk.virtualWrite(VIRTUAL_HUMIDITY, humidity);
+    Blynk.virtualWrite(VIRTUAL_SOIL, soilMoisture);
+}
+
+void controlDevices() {
+    if (autoMode) { 
+        if (temperature < 20) {
+            digitalWrite(LIGHT_RELAY, HIGH);  // TURN ON LIGHT
+            Blynk.virtualWrite(VIRTUAL_LIGHT, 1);
+        } else {
+            digitalWrite(LIGHT_RELAY, LOW);   // TURN OFF LIGHT
+            Blynk.virtualWrite(VIRTUAL_LIGHT, 0);
+        }
+
+        if (soilMoisture < 30) {
+            digitalWrite(PUMP_RELAY, LOW);    // TURN ON PUMP
+            Blynk.virtualWrite(VIRTUAL_PUMP, 1);
+        } else {
+            digitalWrite(PUMP_RELAY, HIGH);   // TURN OFF PUMP
+            Blynk.virtualWrite(VIRTUAL_PUMP, 0);
+        }
+    }
+}
+
+void checkConditions() {
+    if (temperature > 30 || soilMoisture < 30) { 
+        Serial.println("Warning: Activating Buzzer!");
+        digitalWrite(BUZZER_RELAY, HIGH);  // TURN ON BUZZER
+    } else {
+        digitalWrite(BUZZER_RELAY, LOW);   // TURN OFF BUZZER
+    }
+}
+
+BLYNK_WRITE(VIRTUAL_MODE) {
+    autoMode = param.asInt();
+    Serial.print("Mode changed: ");
+    Serial.println(autoMode ? "Automatic" : "Manual");
+}
+
+BLYNK_WRITE(VIRTUAL_BUZZER) {
+    if (!autoMode) {
+        int state = param.asInt();
+        digitalWrite(BUZZER_RELAY, state ? LOW : HIGH);
+    }
+}
+
+BLYNK_WRITE(VIRTUAL_PUMP) {
+    if (!autoMode) {
+        int state = param.asInt();
+        digitalWrite(PUMP_RELAY, state ? LOW : HIGH); // LOW = ON, HIGH = OFF
+        Blynk.virtualWrite(VIRTUAL_PUMP, state);
+    }
+}
+
+BLYNK_WRITE(VIRTUAL_LIGHT) {
+    if (!autoMode) {
+        int state = param.asInt();
+        digitalWrite(LIGHT_RELAY, state ? HIGH : LOW); // HIGH = ON, LOW = OFF
+        Blynk.virtualWrite(VIRTUAL_LIGHT, state);
+    }
+}
